@@ -44,21 +44,70 @@ Este repositorio explora tres tipos fundamentales de spoofing:
 ### **2. DNS Spoofing (Sistema de Nombres de Dominio)**
 
 * **¿Cómo Funciona?**
-    El DNS (Sistema de Nombres de Dominio) traduce nombres de dominio legibles (ej., google.com) a direcciones IP (ej., 172.217.160.142). El DNS Spoofing, también conocido como envenenamiento de caché DNS, ocurre cuando un atacante falsifica la respuesta de un servidor DNS a una petición de un cliente. Si la víctima intenta acceder a `bancofalso.com`, el atacante intercepta la petición DNS y le envía una respuesta falsa, apuntando `bancofalso.com` a una IP controlada por el atacante (por ejemplo, un sitio de phishing).
-    Este ataque a menudo se combina con ARP Spoofing para asegurar que el tráfico DNS de la víctima pase por el atacante.
+    El DNS (Sistema de Nombres de Dominio) es el "directorio telefónico de Internet", traduciendo nombres de dominio legibles (ej., `google.com`) a direcciones IP (ej., `172.217.160.142`). Un ataque de **DNS Spoofing**, también conocido como envenenamiento de caché DNS, ocurre cuando un atacante falsifica la respuesta de un servidor DNS a una petición de un cliente.
 
-* **Características Esperadas del Script `DnsSpoofing.py` (a desarrollar):**
-    * **Intercepción de Peticiones DNS:** Escucha el tráfico DNS de la red.
-    * **Falsificación de Respuestas DNS:** Responde a peticiones DNS específicas con direcciones IP falsas controladas por el atacante.
-    * **Configuración de Reglas de Spoofing:** Permite al usuario definir qué dominios falsificar y a qué IP redirigirlos.
-    * Integración potencial con ARP Spoofing para asegurar la intercepción del tráfico DNS.
+    1.  **Intercepción:** El atacante, posicionado como "Man-in-the-Middle" (gracias a ARP Spoofing u otras técnicas), intercepta la petición DNS de la víctima.
+    2.  **Falsificación:** Antes de que la petición llegue al servidor DNS legítimo, o antes de que su respuesta legítima llegue a la víctima, el atacante envía una respuesta DNS falsa a la víctima.
+    3.  **Redirección:** Esta respuesta falsa le dice a la víctima que el nombre de dominio solicitado (ej., `bancofalso.com`) está asociado a una dirección IP controlada por el atacante (por ejemplo, la IP de un sitio de phishing o un servidor malicioso).
+    4.  **Engaño:** La víctima, al recibir la respuesta DNS falsa primero (o creyéndola legítima), intenta conectarse a la IP maliciosa controlada por el atacante, en lugar de al sitio web original.
+
+    Este ataque a menudo se combina con ARP Spoofing para asegurar que el tráfico DNS de la víctima pase por el atacante, permitiendo la intercepción necesaria.
+
+* **Intercepción con NetfilterQueue e Iptables:**
+    Para realizar DNS Spoofing, el atacante necesita una forma de interceptar los paquetes de red, inspeccionarlos y posiblemente modificarlos. En sistemas Linux, `iptables` y `NetfilterQueue` son herramientas poderosas para esto:
+    * **`iptables`**: Es una utilidad de línea de comandos que permite configurar las reglas de firewall del kernel de Linux (Netfilter). Permite redirigir paquetes específicos a una "cola" (queue).
+    * **`NetfilterQueue` (nfqueue)**: Es una interfaz de programación (API) que permite a las aplicaciones de espacio de usuario (como tu script Python) interactuar con los paquetes que `iptables` ha redirigido a una cola. Esto significa que puedes recibir paquetes en tu script, examinarlos, modificarlos y luego decidir si los aceptas (los dejas pasar), los deniegas (los descartas) o los inyectas de nuevo en la red modificados.
+
+    **Reglas de `iptables` para Redirección (¡Necesitas `sudo` para esto!):**
+    Para redirigir los paquetes de entrada (`INPUT`), salida (`OUTPUT`) y reenvío (`FORWARD`) al `NFQUEUE` con número de cola `0`:
+
+    ```shell
+    # Redirige los paquetes que entran a la máquina (si la víctima eres tú)
+    iptables -I INPUT -j NFQUEUE --queue-num 0 
+
+    # Redirige los paquetes que salen de la máquina (si la víctima eres tú)
+    iptables -I OUTPUT -j NFQUEUE --queue-num 0 
+
+    # Redirige los paquetes que se reenvían a través de la máquina (común en MITM)
+    iptables -I FORWARD -j NFQUEUE --queue-num 0 
+
+    # Asegura que la política de FORWARD sea ACCEPT para permitir el reenvío de tráfico
+    # Esto es crucial si estás haciendo MITM y quieres que la víctima tenga internet
+    iptables --policy FORWARD ACCEPT
+    ```
+    * **`-I` (Insert):** Inserta la regla al principio de la cadena.
+    * **`-j NFQUEUE`:** Indica que el destino del paquete es `NFQUEUE`.
+    * **`--queue-num 0`:** Especifica el número de cola al que se enviarán los paquetes. Tu script Python debe "escuchar" en este mismo número de cola.
+
+    **Para Desactivar/Eliminar las Reglas de `iptables`:**
+    Es vital limpiar las reglas de `iptables` después del ataque para restaurar la conectividad normal. Para ello, reemplaza `-I` con `-D` (Delete):
+
+    ```shell
+    # Eliminar reglas específicas
+    iptables -D INPUT -j NFQUEUE --queue-num 0
+    iptables -D OUTPUT -j NFQUEUE --queue-num 0
+    iptables -D FORWARD -j NFQUEUE --queue-num 0
+
+    # Restaurar la política FORWARD si la habías cambiado y no quieres que esté en ACCEPT
+    # Ten cuidado si tu sistema requiere una política diferente por defecto.
+    # iptables --policy FORWARD DROP 
+    ```
+
+* **Características del Script `DnsSpoofing.py`:**
+    * **Intercepción Activa:** Captura peticiones DNS enviadas por el objetivo.
+    * **Falsificación Selectiva:** Permite al atacante especificar qué dominios desea falsificar y a qué IP maliciosa deben redirigirse.
+    * **Manipulación de Paquetes Scapy:** Utiliza `Scapy` para construir y modificar respuestas DNS de forma programática.
+    * **Inyección de Paquetes Modificados:** Reenvía las respuestas DNS falsificadas a la víctima.
+    * **Restauración de Reglas Iptables:** Incluye una función para limpiar las reglas de `iptables` al finalizar, restaurando la conectividad normal.
 
 * **Tecnologías y Conceptos Clave:**
     * **Python 3.x**
-    * **Librería `scapy`:** Creación y análisis de paquetes DNS.
-    * Protocolo DNS.
+    * **Librería `netfilterqueue`:** Interceptación de paquetes a nivel de kernel.
+    * **Librería `scapy`:** Creación, edición y análisis de paquetes de red, especialmente DNS.
+    * `iptables`: Configuración de reglas de firewall.
+    * Protocolo DNS (peticiones `DNSRR` - DNS Resource Record).
     * Envenenamiento de Caché DNS.
-    * Redirección de Tráfico.
+    * MITM a nivel DNS.
 
 ---
 
