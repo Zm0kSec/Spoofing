@@ -116,18 +116,32 @@ Este repositorio explora tres tipos fundamentales de spoofing:
 * **¿Cómo Funciona?**
     El HTTP Spoofing implica la manipulación del tráfico HTTP (no cifrado) que pasa a través del atacante. Una vez que el atacante ha establecido una posición MITM (por ejemplo, con ARP Spoofing), puede interceptar y modificar las peticiones o respuestas HTTP en tiempo real. Esto puede usarse para inyectar contenido (ej., scripts maliciosos, banners de phishing), redirigir a los usuarios a sitios maliciosos, o alterar la información que ven en sitios no seguros. Es una técnica potente para inyectar JavaScript para capturar credenciales o cookies.
 
-* **Características Esperadas del Script `HttpSpoofing.py` (a desarrollar):**
-    * **Redirección HTTP:** Redirige peticiones HTTP a URLs controladas por el atacante.
-    * **Inyección de Contenido:** Inyecta código HTML o JavaScript en páginas web no cifradas.
-    * **Filtros Personalizados:** Permite definir reglas para qué tipo de tráfico HTTP interceptar y modificar.
-    * Monitoreo básico de peticiones/respuestas HTTP.
+    **Puntos Clave del Proceso:**
+    1.  **Intercepción:** El tráfico HTTP (comúnmente en el puerto 80) es redirigido a la máquina del atacante (usando `iptables` y `netfilterqueue`, al igual que con DNS Spoofing).
+    2.  **Inspección:** El script examina los paquetes para determinar si son peticiones (salientes) o respuestas (entrantes) HTTP.
+    3.  **Modificación:**
+        * **Peticiones:** Puede modificar cabeceras (ej., eliminar `Accept-Encoding` para asegurar respuestas no comprimidas y facilitar la inyección), o alterar la URL de la petición para redirigir al navegador.
+        * **Respuestas:** Puede inyectar código (como JavaScript o HTML) en el cuerpo de la página web que recibe la víctima, o reemplazar texto dentro del contenido.
+    4.  **Reenvío:** El paquete modificado se reenvía a su destino.
+
+    **Importante:** Esta técnica solo funciona para tráfico **HTTP (no cifrado)**. El tráfico HTTPS (cifrado, puerto 443) no puede ser manipulado directamente con esta técnica sin un ataque de descifrado más complejo como SSL Stripping o falsificación de certificados.
+
+* **Características del Script `HttpSpoofing.py`:**
+    * **Intercepción de Tráfico HTTP:** Captura peticiones y respuestas HTTP utilizando `netfilterqueue` y `iptables`.
+    * **Manipulación de Cabeceras HTTP:** Elimina la cabecera `Accept-Encoding` de las peticiones para prevenir la compresión de respuestas y facilitar la inyección de contenido.
+    * **Inyección de Contenido en Tiempo Real:** Demuestra la capacidad de reemplazar texto o inyectar scripts (ej., `JavaScript` con un `alert()`) directamente en el cuerpo de las respuestas HTTP.
+    * **Recalculado Automático de Checksums:** `Scapy` maneja la actualización de checksums IP y TCP después de la modificación del payload, asegurando que los paquetes sigan siendo válidos.
+    * **Restauración de Reglas Iptables:** Incluye una función para limpiar las reglas de `iptables` al finalizar el script (`Ctrl+C`), restaurando la conectividad de red.
 
 * **Tecnologías y Conceptos Clave:**
     * **Python 3.x**
-    * **Librería `scapy` (o `NetfilterQueue` con `scapy` para un proxy transparente):** Intercepción y manipulación de paquetes.
-    * Protocolo HTTP (headers, métodos, estados).
-    * Inyección de código (HTML, JavaScript).
+    * **Librería `netfilterqueue`:** Interceptación de paquetes a nivel de kernel.
+    * **Librería `scapy`:** Creación, edición y análisis de paquetes de red, incluyendo capas HTTP y TCP.
+    * `iptables`: Configuración de reglas de firewall para redirigir tráfico.
+    * Protocolo HTTP (peticiones GET/POST, respuestas, cabeceras, cuerpo).
+    * Inyección de Código (HTML, JavaScript).
     * Ataques MITM a nivel de aplicación.
+    * Expresiones Regulares (`re`).
 
 ---
 
@@ -136,8 +150,9 @@ Este repositorio explora tres tipos fundamentales de spoofing:
 * **Lenguaje de Programación:** Python 3.x
 * **Librerías Python:**
     * `scapy`: Fundamental para la creación, envío, captura y análisis de paquetes de red.
+    * `netfilterqueue`: Para la intercepción de paquetes a nivel de kernel (especialmente para DNS y HTTP Spoofing).
     * `argparse`: Para el manejo de argumentos de línea de comandos en cada script.
-    * `os`, `sys`, `signal`, `time`, `re` (para DNS/HTTP, si aplica): Para operaciones de sistema, manejo de señales, temporización y expresiones regulares.
+    * `os`, `sys`, `signal`, `time`, `re` (para DNS/HTTP): Para operaciones de sistema, manejo de señales y temporización.
 * **Conceptos de Red y Seguridad:**
     * Protocolos TCP/IP (ARP, DNS, HTTP)
     * Ataques Man-in-the-Middle (MITM)
@@ -147,14 +162,17 @@ Este repositorio explora tres tipos fundamentales de spoofing:
 ### 🛠️ Pre-requisitos y Configuración General
 
 1.  **Máquina Atacante:**
-    * Un sistema basado en **Linux** (recomendado, ya que Scapy funciona mejor y el control de red es más directo).
+    * Un sistema basado en **Linux** (recomendado, ya que Scapy y NetfilterQueue funcionan mejor y el control de red es más directo).
     * Python 3.x instalado.
-    * **Librerías Scapy y `dnspython` (si usas para DNS):**
+    * **Librerías Python (Instalación General):**
         ```bash
-        pip install scapy dnspython # dnspython es útil para DNS queries/responses
+        sudo apt-get update
+        sudo apt-get install build-essential python3-dev libnetfilter-queue-dev
+        pip3 install scapy netfilterqueue --break-system-packages
         ```
+        * **Nota:** Para entornos de desarrollo más limpios, considera usar [entornos virtuales](https://docs.python.org/3/library/venv.html).
 2.  **Habilitar IP Forwarding (en la máquina atacante):**
-    * Para que el tráfico interceptado por ARP Spoofing (y por extensión, DNS/HTTP Spoofing) se reenvíe a su destino real, debes habilitar el reenvío de IP.
+    * Para que el tráfico interceptado (esencial para MITM) se reenvíe a su destino real, debes habilitar el reenvío de IP.
     * Ejecuta el siguiente comando en tu terminal (se requiere `sudo`):
         ```bash
         sudo sysctl -w net.ipv4.ip_forward=1
@@ -167,44 +185,70 @@ Este repositorio explora tres tipos fundamentales de spoofing:
 
 ### ⚙️ Cómo Usar las Herramientas (Ejemplos)
 
-Para cada herramienta, deberás ejecutarla con los argumentos específicos.
+Para cada herramienta, deberás ejecutarla con los argumentos específicos. **Todos los scripts requieren privilegios de root (`sudo`).**
 
-1.  **ArpSpoofing.py:**
+1.  **`ArpSpoofing.py`:**
     ```bash
     sudo python3 ArpSpoofing.py -t [IP_OBJETIVO] -g [IP_GATEWAY]
     ```
-    * Reemplaza `[IP_OBJETIVO]` con la dirección IP de la víctima.
-    * Reemplaza `[IP_GATEWAY]` con la dirección IP del router/gateway.
-    * Detén con `Ctrl+C` para restaurar las tablas ARP.
+    * Reemplaza `[IP_OBJETIVO]` con la dirección IP de la víctima que quieres engañar.
+    * Reemplaza `[IP_GATEWAY]` con la dirección IP de tu router o gateway de red.
+    * **Detener el Ataque:** Presiona `Ctrl+C`. El script restaurará las tablas ARP antes de salir.
 
-2.  **DnsSpoofing.py (Ejemplo - script a desarrollar):**
+2.  **`DnsSpoofing.py`:**
     ```bash
-    sudo python3 DnsSpoofing.py --domain [DOMINIO_A_FALSIFICAR] --ip [IP_FALSA]
+    sudo python3 DnsSpoofing.py -s [DOMINIO_A_FALSIFICAR_1]:[IP_FALSA_1] -s [DOMINIO_A_FALSIFICAR_2]:[IP_FALSA_2]
     ```
-    * Este script debería funcionar junto con `ArpSpoofing.py` (en otra terminal) o si ya controlas el tráfico de alguna otra forma.
+    * **Ejemplo:** `sudo python3 DnsSpoofing.py -s google.com:192.168.1.100 -s facebook.com:192.168.1.101`
+    * Este script debe ejecutarse **después de que el tráfico ya esté pasando por tu máquina** (generalmente usando `ArpSpoofing.py` en otra terminal).
+    * **Detener el Ataque:** Presiona `Ctrl+C`. El script eliminará automáticamente las reglas de `iptables`.
 
-3.  **HttpSpoofing.py (Ejemplo - script a desarrollar):**
+3.  **`HttpSpoofing.py`:**
+    Este script te permite interceptar y manipular el tráfico HTTP (no cifrado) que fluye a través de tu máquina, posicionado como un Man-in-the-Middle. Puedes modificar cabeceras, inyectar contenido (como JavaScript malicioso) o cambiar el texto en las respuestas web.
+
+    **Sintaxis (Requiere `sudo`):**
+
     ```bash
-    sudo python3 HttpSpoofing.py --redirect-to [URL_MALICIOSA] --inject-js [URL_DE_JS_MALICIOSO]
+    sudo python3 HttpSpoofing.py
     ```
-    * Este script también requerirá que el tráfico HTTP pase por tu máquina (generalmente con ARP Spoofing).
+
+    **Flujo para un Ataque MITM Completo con HTTP Spoofing:**
+
+    1.  **Habilita IP Forwarding** en tu máquina atacante (ver sección de `Pre-requisitos y Configuración General` en el `README.md` principal).
+    2.  **Inicia el ARP Spoofing:** En una terminal, ejecuta `ArpSpoofing.py` para redirigir el tráfico del objetivo (y del router) a tu máquina.
+        ```bash
+        sudo python3 ArpSpoofing.py -t [IP_OBJETIVO] -g [IP_GATEWAY]
+        ```
+    3.  **Inicia el HTTP Spoofing:** En OTRA terminal, ejecuta `HttpSpoofing.py`.
+        ```bash
+        sudo python3 HttpSpoofing.py
+        ```
+        * **Importante:** Este script solo afectará al tráfico HTTP (no cifrado, puerto 80). El tráfico HTTPS (cifrado, puerto 443) no puede ser manipulado directamente con esta técnica sin un ataque más complejo como SSL Stripping o falsificación de certificados.
+    4.  **Prueba desde la Máquina Objetivo:**
+        * Navega a un sitio web **HTTP** (no HTTPS). Por ejemplo, un sitio de prueba HTTP como `http://testphp.vulnweb.com/` o `http://http.badssl.com/`.
+        * Deberías ver la modificación del contenido (ej. "Hacked by ZmkBlacK ToT") o el script inyectado ejecutarse en el navegador del objetivo.
+
+    **Detener el Ataque:**
+
+    * Presiona `Ctrl+C` en la terminal donde se ejecuta `HttpSpoofing.py`. El script eliminará automáticamente las reglas de `iptables` que añadió.
+    * Luego, detén también el script `ArpSpoofing.py` (si lo estabas usando) para restaurar completamente la conectividad de la red.
 
 ### ⚠️ Advertencias y Consideraciones Éticas
 
 * Estos proyectos están diseñados **exclusivamente con fines educativos y de investigación en ciberseguridad**.
 * **Nunca uses estas herramientas contra sistemas o redes sin el permiso explícito y por escrito de sus propietarios.** Es ilegal y puede tener graves consecuencias.
-* Los ataques de spoofing pueden interrumpir la conectividad de la red si no se manejan correctamente.
+* Los ataques de spoofing pueden interrumpir la conectividad de la red si no se manejan correctamente (especialmente la restauración de las tablas ARP y las reglas de `iptables`).
 * El autor no se hace responsable del uso indebido de estas herramientas.
 
 ### 🗺️ Roadmap (Posibles Mejoras Futuras para la Suite)
 
 * **Interfaz Unificada:** Un script principal que orchestre los diferentes tipos de spoofing.
-* **Manejo de Firewall:** Configuración automática de reglas de `iptables` para reenviar o manipular tráfico.
+* **Manejo Automático de Firewall:** Configuración más inteligente de reglas de `iptables`.
 * **Capacidades de Logging:** Registrar el tráfico o los eventos de spoofing.
 * **Detección:** Implementar módulos para detectar ataques de spoofing en la red.
 * **Integración de Sniffer:** Capturar y analizar el tráfico interceptado directamente desde las herramientas.
 
 ### ✉️ Contacto
 
-[Zm0kSec]
+[TZm0kSec]
 www.linkedin.com/in/benedicto-palma-verdugo-094931301
